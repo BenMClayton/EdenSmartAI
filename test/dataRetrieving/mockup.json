@@ -1,0 +1,18 @@
+{
+    "input": [
+        { //EACH OBJECT IS AN HOUR FOR 1 USER FOR 1 GROUP
+            "dateTimeEpoch": 837163847,
+            "roomSizeM2": "15",
+            "": ""
+        },
+        {
+            "dateTimeEpoch": 837163847,
+            "roomSizeM2": "15",
+            "": ""
+        }
+    ],
+    "output": [
+        0,
+        0
+    ]
+}
