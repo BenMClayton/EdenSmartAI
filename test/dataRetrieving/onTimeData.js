@@ -4,8 +4,13 @@ const fs = require('fs');
 const { JSDOM } = require( "jsdom" );
 const { window } = new JSDOM( "" );
 const $ = require( "jquery" )( window );
+const { StreamArray } = require('stream-json/streamers/StreamArray');
+const stream = require('stream');
 
-var finalData = [[],[]];
+var finalData = {
+    "features": [],
+    "values": []
+};
 
 async function getRelayHistory(timespan, datetime, user, scope, searchItem) {
     const data = {
@@ -190,8 +195,54 @@ function getTotalPanelWattage(groupName, devices, assignments){
             }
         }
     }
-
     return totalWattage;
+}
+
+function getRoomSize(groupName, groupProperties){
+    let roomSize = 0;
+    $.each(groupProperties, function(index, value){
+        if(value.groupName == groupName){
+            roomSize = value.propertyValue;
+
+        }
+    })
+    return roomSize;
+}
+
+function formatWeatherData(weather, focusDate){
+    const HOURS_IN_DAY = 24;
+    let weatherDataForDay = [];
+
+
+    let focusDateFormatted = new Date(focusDate).toISOString().split("T")[0];
+
+    for(let h = 0; h <= HOURS_IN_DAY; h++){
+        const foundWeather = weather.find(function(value){
+            return parseInt(value.datetimeEpoch) > focusDate / 1000 && parseInt(value.datetimeEpoch) <= ((focusDate / 1000) + 86400000);
+        });
+        
+        if (foundWeather) {
+            weatherDataForDay.push(parseInt(foundWeather.datetimeEpoch * 1000));
+            weatherDataForDay.push(parseInt(foundWeather.precip ? foundWeather.precip : 0));
+            weatherDataForDay.push(parseInt(foundWeather.precipprob ? foundWeather.precipprob : 0));
+            weatherDataForDay.push(parseInt(foundWeather.precipcover ? foundWeather.precipcover : 0));
+            weatherDataForDay.push(parseInt(foundWeather.preciptype ? 1 : 0));
+            weatherDataForDay.push(parseInt(foundWeather.tempmin ? foundWeather.tempmin : 0));
+            weatherDataForDay.push(parseInt(foundWeather.temp ? foundWeather.temp : 0));
+            weatherDataForDay.push(parseInt(foundWeather.tempmax ? foundWeather.tempmax : 0));
+            weatherDataForDay.push(parseInt(foundWeather.feelslikemin ? foundWeather.feelslikemin : 0));
+            weatherDataForDay.push(parseInt(foundWeather.feelslike ? foundWeather.feelslike : 0));
+            weatherDataForDay.push(parseInt(foundWeather.feelslikemax ? foundWeather.feelslikemax : 0));
+            weatherDataForDay.push(parseInt(foundWeather.cloudcover ? foundWeather.cloudcover : 0));
+            weatherDataForDay.push(parseInt(foundWeather.solarradiation ? foundWeather.solarradiation : 0));
+            weatherDataForDay.push(parseInt(foundWeather.solarenergy ? foundWeather.solarenergy : 0));
+            weatherDataForDay.push(parseInt(foundWeather.UVIndex ? foundWeather.UVIndex : 0));
+            weatherDataForDay.push(new Date(focusDateFormatted + "T" + foundWeather.sunrise).getTime());
+            weatherDataForDay.push(new Date(focusDateFormatted + "T" + foundWeather.sunset).getTime());
+        }
+    }
+    console.log(weatherDataForDay.length)
+    return weatherDataForDay;
 }
 
 async function addUserDataToDataset(user, startDate, endDate){
@@ -210,35 +261,82 @@ async function addUserDataToDataset(user, startDate, endDate){
     //FORMATTING
     historyData = formatTotalOnTimes(historyData);
 
-    let finalData;
-    //LOOP THROUGH WEATHER DATA AS IS HOURLY. If prev index is less than 6000 away then stop adding to finalData
-    $.each(weather, function(index, value){
-        let previousWeatherFocus = weather[index-1];
+    startDate = new Date(startDate);
+    endDate = new Date(endDate);
+    let dayDifference = (endDate.getTime() - startDate.getTime()) / 24 / 60 / 60 / 1000; //turn milliseconds -> days
 
-        if(!weather[index-1]){ //To negate the first 1
-            previousWeatherFocus = value;
-        }
 
-        if(value.datetimeEpoch - previousWeatherFocus.datetimeEpoch <= 100000){ //Makes sure data is 1 hour ahead not 1 day
-            console.log("hour");
-        }else{
-            console.log("day");
-            return;
+    let firstHistoryInfo = Object.values(historyData)[0]; //History info always contains all the group names
+    let groupNames = Object.keys(firstHistoryInfo);
+    console.log("GROUPS", groupNames.length);
+
+    $.each(groupNames, function(key, groupName){
+        for(let d = 0; d < dayDifference; d++){ //TODO: loop through each day of the range
+            let focusDate = startDate.getTime() + (86400000 * d);
+            let feature = [];
+            feature.push(parseInt(getRoomSize(groupName, groupProperties)));
+            feature.push(parseInt(getTotalPanelWattage(groupName, deviceData, productAssignments)));
+            feature.push(...formatWeatherData(weather, focusDate));
+
+            const focusDateFormatted = new Date(focusDate).toISOString().split("T")[0]; //converts to YYYY-MM-DD format
+            onTime = historyData[focusDateFormatted] ?  historyData[focusDateFormatted] : 0;
+            finalData.features.push(feature);
+            finalData.values.push(onTime[groupName] ? onTime[groupName]:0);
         }
     })
+
+    return finalData;
 }
 
-async function main(){
-    let users = ["clients2.zachary@yandiyatechnologies.com","clients2.torry@yandiyatechnologies.com"];
+async function main() {
+    const writableStream = fs.createWriteStream("on-time-prediction-dataset.json");
 
+    let users = ["clients2.torry@yandiyatechnologies.com"];
     const START_DATE = "2023-01-01";
-    const END_DATE = "2023-07-01";
+    const END_DATE = "2023-01-02";
 
     for (const user of users) {
-        await addUserDataToDataset(user, START_DATE, END_DATE)
+        const finalData = await addUserDataToDataset(user, START_DATE, END_DATE);
+        
+        // Write the opening brace for the JSON object
+        writableStream.write('{');
+
+        // Write the 'features' array
+        writableStream.write('"features": [');
+        for (let i = 0; i < finalData.features.length; i++) {
+            writableStream.write(JSON.stringify(finalData.features[i]));
+            if (i < finalData.features.length - 1) {
+                writableStream.write(',');
+            }
+        }
+        writableStream.write('],');
+
+        // Write the 'values' array
+        writableStream.write('"values": [');
+        for (let i = 0; i < finalData.values.length; i++) {
+            writableStream.write(JSON.stringify(finalData.values[i]));
+            if (i < finalData.values.length - 1) {
+                writableStream.write(',');
+            }
+        }
+        writableStream.write(']');
+
+        // Write the closing brace for the JSON object
+        writableStream.write('}');
+
+        console.log(`Done for user: ${user}`);
     }
 
-    fs.writeFileSync("on-time-prediction-dataset.txt", JSON.stringify(finalData));
+    writableStream.end(() => {
+        console.log('All data written.');
+        let learningDataString = fs.readFileSync("on-time-prediction-dataset.json", 'utf8');
+        let learningData = JSON.parse(learningDataString);
+
+        //console.log(learningData.features);
+    });
+
+    
 }
+
 
 main();
