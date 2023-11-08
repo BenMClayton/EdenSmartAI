@@ -213,7 +213,6 @@ function formatWeatherData(weather, focusDate){
     const HOURS_IN_DAY = 24;
     let weatherDataForDay = [];
 
-
     let focusDateFormatted = new Date(focusDate).toISOString().split("T")[0];
 
     for(let h = 0; h <= HOURS_IN_DAY; h++){
